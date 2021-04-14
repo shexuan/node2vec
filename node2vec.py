@@ -2,74 +2,7 @@ from collections import defaultdict
 import random
 from pyspark.ml.feature import CountVectorizer, Word2Vec, Word2VecModel
 import numpy as np
-
-
-def generate_transfer_matrix(df, column='camp_id'):
-    # 把每一对相邻的word整理成一个可以转移的word pair
-    # 注：需要先过滤一下原始序列, 否则如果只有一个元素的话，这里会报错
-    pair_udf = udf(lambda lst: [[lst[i-1], lst[i]]
-                                for i in range(1, len(lst))], ArrayType(ArrayType(StringType())))
-
-    # 计算每一个转移对出现的次数
-    pair_counts = df.withColumn("pairs", pair_udf(column))\
-                    .withColumn("pair", Func.explode("pairs"))\
-                    .groupby("pair").count()\
-                    .select('pair', 'count').collect()
-    print('Total pair numbers:', len(pair_counts))
-
-    # 使用嵌套哈希表存储概率转移矩阵
-    transfer_matrix = defaultdict(dict)
-    # 所有pair起点item的出现次数统计，用于选择生成sentence时选择第一个id
-    item_count = defaultdict(int)
-
-    tot_start = 0.
-    for row in pair_counts:
-        transfer_matrix[row['pair'][0]][row['pair'][1]] = row['count']
-        item_count[row['pair'][0]] += row['count']
-        tot_start += row['count']
-
-    # 对每个起始点计算归一化的转移概率
-    for key, dic in transfer_matrix.items():
-        tot = 0.
-        # 先计算总和
-        for val, cnt in dic.items():
-            tot += cnt
-        # 归一化
-        for val, cnt in dic.items():
-            transfer_matrix[key][val] = cnt/float(tot)
-
-    # start item in pair distribution
-    item_distributions = dict()
-    for item, cunt in item_count.items():
-        item_distributions[item] = cunt/float(tot_start)
-
-    return transfer_matrix, item_distributions
-
-
-def graph_emb(self, samples, w2v_model_save_path=None, w2v_args=None):
-    """利用随机游走采样结果来进行word2vec训练
-    Args:
-        samples: list, 随机游走的采样结果；
-        w2v_model_save_path: word2vec模型的保存路径；
-        w2v_args: dict, word2vec模型的训练参数,  
-            e.g., {"vectorSize":64, "minCount":3, "seed":123, "numPartitions":64, "maxIter":5, "maxSentenceLength":128, "windowSize":5} or vectorSize=64, minCount=3, ...}
-    """
-    data = sc.parallelize(samples).toDF()
-    columns = ['_'+str(i) for i in range(1, len(samples[0])+1)]
-    data = data.withColumn(
-        'sentence', Func.array(columns)).select('sentence')
-
-    w2v = Word2Vec(inputCol='sentence', outputCol='vec', **w2v_args)
-    w2ver = w2v.fit(data)
-    # data = w2ver.transform(data)
-
-    if w2v_model_save_path:
-        # save model
-        w2ver.write().overwrite().save(w2v_model_save_path)
-        # load model
-        # w2v_model = Word2VecModel.load(model_path)
-
-    return w2ver
+import math
 
 
 class GraphWalk(object):
@@ -79,68 +12,96 @@ class GraphWalk(object):
     def simulate_walks(self):
         raise NotImplementedError
 
+    def pick_fisrt(self):
+        """如何选择第一个样本
+        1、根据所有item作为出发结点的频率来进行抽样，出发结点也即pair中的第一个元素
+        2、每个样本都抽取到
+        """
+        if self.method == 'random':  # 根据概率来随机抽样，这样可能会使得部分样本抽不到
+            prob_first = random.random()
+            cur_item = ""
+            accumulate_prob = 0.
+            for item, prob in self.item_distributions.items():
+                accumulate_prob += prob
+                if (accumulate_prob >= prob_first):
+                    break
+            return item
+        else:  # 先获取所有其实结点集合，然后遍历此集合中的结点作为出发位点
+            if self.starters:
+                return self.starters.pop()
+
     def simulate_walks(self):
+        """采样
+        """
+        samples = []
+        for i in range(self.sample_num):
+            first_item = self.pick_fisrt()
+            samples.append(self._one_walk(first_item))
+
+        return samples
+
+
+class DeepWalk(GraphWalk):
+    def __init__(self, transfer_matrix, item_distributions, sample_length, sample_num, method='iter'):
         """ 随机游走，利用轮盘法来进行采样每个id
         Args:
             transfer_matrix: 嵌套字典，每个item的下一个item的概率分布，已归一化；
             item_distributions: 字典，原始所有pair的起始item的概率分布，已归一化；
             sample_length: int，每次采样长度；
             sample_num: int, 采样生成的sentence数量；
+            method: str, 是否保证每个样本都被采到
         """
-        samples = []
-        for i in range(self.sample_num):
-            samples.append(self._one_walk())
-
-        return samples
-
-
-class DeepWalk(GraphWalk):
-    def __init__(self, transfer_matrix, item_distributions, sample_length, sample_num):
         self.transfer_matrix = transfer_matrix
         self.item_distributions = item_distributions
         self.sample_length = sample_length
         self.sample_num = sample_num
 
-    def _one_walk(self):
-    """使用轮盘法来选择每个item.
-    Args:
-        transfer_matrix: 嵌套字典，每个item的下一个item的概率分布，已归一化；
-        item_distributions: 字典，原始所有pair的起始item的概率分布，已归一化；
-        sample_length: int，每次采样长度；
-    """
-    sample = []
-    # pick the first element
-    prob_first = random.random()
-    cur_item = ""
-    accumulate_prob = 0.
-    for item, prob in self.item_distributions.items():
-        accumulate_prob += prob
-        if (accumulate_prob >= prob_first):
-            cur_item = item
-            sample.append(item)
-            break
+        self.method = method
+        if self.method != 'random':
+            # 生成序列的起始位点集合，确保每个结点都能被采样到
+            self.starters = [[i[0]]*int(math.ceil(sample_num*i[1]))
+                             for i in item_distributions.items()]
+            self.sample_num = len(self.starters)
 
-    cnt = 1
-    while (cnt <= self.sample_length):
-        if (cur_item not in self.transfer_matrix) or (cur_item not in self.item_distributions):
-            break
-        next_distributions = self.transfer_matrix[cur_item]
-        random_prob = random.random()
-        accumulate_prob = 0.
-        for item, prob in next_distributions.items():
-            accumulate_prob += prob
-            if (accumulate_prob >= random_prob):
-                cur_item = item
-                sample.append(cur_item)
+    def _one_walk(self, first_item):
+        """单次采样，使用轮盘法来选择每个item.
+        """
+        sample = [first_item]
+        cur_item = first_item
+
+        cnt = 1
+        while (cnt <= self.sample_length):
+            if (cur_item not in self.transfer_matrix) or (cur_item not in self.item_distributions):
                 break
+            next_distributions = self.transfer_matrix[cur_item]
+            random_prob = random.random()
+            accumulate_prob = 0.
+            for item, prob in next_distributions.items():
+                accumulate_prob += prob
+                if (accumulate_prob >= random_prob):
+                    cur_item = item
+                    sample.append(cur_item)
+                    break
 
-        cnt += 1
+            cnt += 1
 
-    return sample
+        return sample
 
 
 class Node2vec(GraphWalk):
-    def __init__(self, transfer_matrix, item_distributions, sample_length, sample_num, p, q):
+    def __init__(self, transfer_matrix, item_distributions, sample_length, sample_num, p, q, method='iter'):
+        """ node2vec
+        Args:
+            transfer_matrix: 嵌套字典，每个item的下一个item的概率分布，已归一化，
+                    eg., {'n1':{'n2':0.1, 'n3':0.2, 'n4':0.7}, 'n3':{...}, ...}；
+            item_distributions: 字典，原始所有pair的起始item的概率分布，已归一化；
+            sample_length: int，每次采样长度；
+            sample_num: int, 采样生成的sentence数量；
+            p: float, 往回走的系数;
+            q: float, DFS的系数, BFS的系数为1;
+            method: str, 是否保证每个样本都被采到；
+        """
+
         self.transfer_matrix = transfer_matrix
         self.item_distributions = item_distributions
         self.sample_length = sample_length
@@ -149,6 +110,13 @@ class Node2vec(GraphWalk):
         self.q = q
 
         self.alias_edges = {}
+
+        self.method = method
+        if self.method != 'random':
+            # 生成序列的起始位点集合，确保每个结点都能被采样到
+            self.starters = [[i[0]]*int(math.ceil(sample_num*i[1]))
+                             for i in item_distributions.items()]
+            self.sample_num = len(self.starters)
 
     def create_alias_table(self, area_ratio):
         """创建alias table，从而进行拒绝采样. 
@@ -191,8 +159,7 @@ class Node2vec(GraphWalk):
             G: dict，概率转移矩阵，{'n1':{'n2':0.1, 'n3':0.2, 'n4':0.7}, ...};
             pre: string, 前一个结点的名称;
             cur: string, 当前结点名称;
-            p: float, 往回走的系数;
-            q: float, DFS的系数, BFS的系数为1;
+
         """
         unnormlized_probs = []
         next_items = []
@@ -230,19 +197,11 @@ class Node2vec(GraphWalk):
         else:
             return alias[i]
 
-    def _one_walk(self):
-        sample = []
+    def _one_walk(self, first_item):
+        sample = [first_item]
         # pick the first element
-        prob_first = random.random()
-        cur_item = ""
+        cur_item = first_item
         pre_item = ""
-        accumulate_prob = 0.
-        for item, prob in self.item_distributions.items():
-            accumulate_prob += prob
-            if (accumulate_prob >= prob_first):
-                cur_item = item
-                sample.append(item)
-                break
 
         cnt = 1
         while (cnt < self.sample_length):
