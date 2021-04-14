@@ -15,7 +15,7 @@ class GraphWalk(object):
     def pick_fisrt(self):
         """如何选择第一个样本
         1、根据所有item作为出发结点的频率来进行抽样，出发结点也即pair中的第一个元素
-        2、每个样本都抽取到
+        2、根据所有item作为出发结点的频率来进行抽样，但是能确保每个样本都抽取到
         """
         if self.method == 'random':  # 根据概率来随机抽样，这样可能会使得部分样本抽不到
             prob_first = random.random()
@@ -156,7 +156,6 @@ class Node2vec(GraphWalk):
     def get_alias_edge(self, pre, cur):
         """获取采样表
         Args:
-            G: dict，概率转移矩阵，{'n1':{'n2':0.1, 'n3':0.2, 'n4':0.7}, ...};
             pre: string, 前一个结点的名称;
             cur: string, 当前结点名称;
 
