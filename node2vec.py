@@ -26,7 +26,7 @@ class GraphWalk(object):
                 if (accumulate_prob >= prob_first):
                     break
             return item
-        else:  # 先获取所有其实结点集合，然后遍历此集合中的结点作为出发位点
+        else:  # 先获取所有起始结点集合，然后遍历此集合中的结点作为出发位点
             if self.starters:
                 return self.starters.pop()
 
@@ -59,8 +59,8 @@ class DeepWalk(GraphWalk):
         self.method = method
         if self.method != 'random':
             # 生成序列的起始位点集合，确保每个结点都能被采样到
-            self.starters = [[i[0]]*int(math.ceil(sample_num*i[1]))
-                             for i in item_distributions.items()]
+            self.starters = [i[0] for i in item_distributions.items()
+                             for _ in range(int(math.ceil(sample_num*i[1])))]
             self.sample_num = len(self.starters)
 
     def _one_walk(self, first_item):
@@ -114,8 +114,8 @@ class Node2vec(GraphWalk):
         self.method = method
         if self.method != 'random':
             # 生成序列的起始位点集合，确保每个结点都能被采样到
-            self.starters = [[i[0]]*int(math.ceil(sample_num*i[1]))
-                             for i in item_distributions.items()]
+            self.starters = [i[0] for i in item_distributions.items()
+                             for _ in range(int(math.ceil(sample_num*i[1])))]
             self.sample_num = len(self.starters)
 
     def create_alias_table(self, area_ratio):

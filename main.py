@@ -3,6 +3,11 @@ import random
 from pyspark.ml.feature import CountVectorizer, Word2Vec, Word2VecModel
 import numpy as np
 from node2vec import DeepWalk, Node2vec
+from gensim.models import word2vec
+
+import logging
+logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s',
+                    level=logging.INFO, datefmt='%m/%d/%Y %H:%M:%S')
 
 
 def generate_transfer_matrix(df, column='camp_id'):
@@ -72,6 +77,24 @@ def graph_emb(self, samples, w2v_model_save_path=None, w2v_args=None):
         # w2v_model = Word2VecModel.load(model_path)
 
     return w2ver
+
+
+def graph_emb_local(sentences, w2v_model_save_path, w2v_args):
+    # 利用随机游走采样结果来进行word2vec训练
+    # w2v_args: dict, word2vec模型的训练参数,
+    #  e.g., {"size":128, "window":5, "min_count":1, "sg":1, "workers":16, "iter":10}
+    model = word2vec.Word2Vec(deepwalks, **w2v_args)
+
+    base_dir = os.path.dirname(w2v_model_save_path)
+    if base_dir and (not os.path.exists(base_dir)):
+        os.makedirs(base_dir)
+
+    print("save w2v to {}".format(w2v_model_save_path))
+    pickle.dump(model, open(w2v_model_save_path, 'wb'))
+
+    # load model
+    # model = pickle.load(open(w2v_model_save_path, 'rb'))
+    return model
 
 
 def main():
