@@ -52,7 +52,7 @@ def generate_transfer_matrix(df, column='camp_id'):
     return transfer_matrix, item_distributions
 
 
-def graph_emb(self, samples, w2v_model_save_path=None, w2v_args=None):
+def graph_emb(samples, w2v_model_save_path=None, w2v_args=None):
     """利用随机游走采样结果来进行word2vec训练, 这里用的是spark的word2vec。
     也可以改为local版的gensim进行训练
     Args:
