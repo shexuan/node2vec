@@ -83,7 +83,7 @@ def graph_emb_local(sentences, w2v_model_save_path, w2v_args):
     # 利用随机游走采样结果来进行word2vec训练
     # w2v_args: dict, word2vec模型的训练参数,
     #  e.g., {"size":128, "window":5, "min_count":1, "sg":1, "workers":16, "iter":10}
-    model = word2vec.Word2Vec(deepwalks, **w2v_args)
+    model = word2vec.Word2Vec(sentences, **w2v_args)
 
     base_dir = os.path.dirname(w2v_model_save_path)
     if base_dir and (not os.path.exists(base_dir)):
